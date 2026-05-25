@@ -1,0 +1,56 @@
+#pragma once
+#include <JuceHeader.h>
+#include "PluginProcessor.h"
+
+// Custom LookAndFeel (Vector Graphics)
+class ModernDial : public juce::LookAndFeel_V4
+{
+public:
+    ModernDial()
+    {
+        setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffd1d1d1));
+        setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    }
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                           float sliderPos, const float rotaryStartAngle,
+                           const float rotaryEndAngle, juce::Slider& slider) override;
+};
+
+class SimpleDelayAudioProcessorEditor  : public juce::AudioProcessorEditor
+{
+public:
+    SimpleDelayAudioProcessorEditor (SimpleDelayAudioProcessor&);
+    ~SimpleDelayAudioProcessorEditor() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    SimpleDelayAudioProcessor& audioProcessor;
+    ModernDial customStyle;
+
+    // Granular UI
+    juce::Slider granSizeSlider, granPitchSlider, granDensSlider, granMixSlider;
+    juce::Label granSizeLabel, granPitchLabel, granDensLabel, granMixLabel;
+
+    // Delay UI
+    juce::Slider delaySlider, feedbackSlider, mixSlider;
+    juce::Label delayLabel, feedbackLabel, mixLabel;
+
+    // Reverb UI
+    juce::Slider revSizeSlider, revDampSlider, revMixSlider, revEarlySlider;
+    juce::Label revSizeLabel, revDampLabel, revMixLabel, revEarlyLabel;
+    juce::ComboBox revTypeBox;
+    juce::Label revTypeLabel;
+
+    // Attachments
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+    
+    std::unique_ptr<SliderAttachment> granSizeAttach, granPitchAttach, granDensAttach, granMixAttach;
+    std::unique_ptr<SliderAttachment> delayAttachment, feedbackAttachment, mixAttachment;
+    std::unique_ptr<SliderAttachment> revSizeAttachment, revDampAttachment, revMixAttachment, revEarlyAttachment;
+    std::unique_ptr<ComboAttachment> revTypeAttachment;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SimpleDelayAudioProcessorEditor)
+};

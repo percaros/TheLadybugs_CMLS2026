@@ -1,0 +1,63 @@
+#pragma once
+#include <JuceHeader.h>
+#include <juce_dsp/juce_dsp.h> 
+
+// 1. Define our Grain structure
+struct Grain {
+    bool active = false;
+    float readPos = 0.0f;
+    float speed = 1.0f;
+    int lengthSamples = 0;
+    int ageSamples = 0;
+};
+
+class SimpleDelayAudioProcessor  : public juce::AudioProcessor
+{
+public:
+    SimpleDelayAudioProcessor();
+    ~SimpleDelayAudioProcessor() override;
+
+    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override;
+
+    const juce::String getName() const override { return "Granular FX"; }
+    bool acceptsMidi() const override { return false; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 2.0; }
+
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram (int index) override {}
+    const juce::String getProgramName (int index) override { return {}; }
+    void changeProgramName (int index, const juce::String& newName) override {}
+
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
+
+    juce::AudioProcessorValueTreeState apvts;
+
+private:
+    juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
+
+    // Granular Variables
+    juce::AudioBuffer<float> granBuffer;
+    int granWritePos { 0 };
+    std::array<Grain, 16> grains; // Pool of 16 overlapping grains
+    int samplesToNextGrain { 0 };
+
+    // Delay Variables
+    juce::AudioBuffer<float> delayBuffer;
+    int writePosition { 0 };
+    double currentSampleRate { 44100.0 };
+
+    // Reverb Variables
+    juce::dsp::Reverb reverbModule;
+    juce::dsp::Reverb::Parameters reverbParams;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SimpleDelayAudioProcessor)
+};

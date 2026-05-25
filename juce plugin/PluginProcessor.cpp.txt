@@ -1,0 +1,238 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+SimpleDelayAudioProcessor::SimpleDelayAudioProcessor()
+     : AudioProcessor (BusesProperties().withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+       apvts (*this, nullptr, "Parameters", createParameters())
+{
+}
+
+SimpleDelayAudioProcessor::~SimpleDelayAudioProcessor() {}
+
+juce::AudioProcessorValueTreeState::ParameterLayout SimpleDelayAudioProcessor::createParameters()
+{
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+    
+    // --- GRANULAR PARAMETERS ---
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("GRAN_SIZE", "Grain Size", 10.0f, 200.0f, 50.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("GRAN_PITCH", "Pitch (Semitones)", -12.0f, 12.0f, 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("GRAN_DENS", "Density (Hz)", 1.0f, 40.0f, 10.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("GRAN_MIX", "Granular Mix", 0.0f, 1.0f, 0.5f));
+
+    // --- DELAY PARAMETERS ---
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("DELAY", "Delay Time (ms)", 10.0f, 2000.0f, 500.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("FEEDBACK", "Delay Feedback", 0.0f, 0.95f, 0.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("MIX", "Delay Mix", 0.0f, 1.0f, 0.5f));
+    
+    // --- REVERB PARAMETERS ---
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("REV_SIZE", "Reverb Size", 0.0f, 1.0f, 0.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("REV_DAMP", "Reverb Damping", 0.0f, 1.0f, 0.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("REV_MIX", "Reverb Mix", 0.0f, 1.0f, 0.3f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("REV_EARLY", "Early Reflections", 0.0f, 1.0f, 0.5f));
+    
+    juce::StringArray reverbTypes = { "Room", "Hall", "Plate" };
+    params.push_back(std::make_unique<juce::AudioParameterChoice>("REV_TYPE", "Reverb Type", reverbTypes, 1));
+    
+    return { params.begin(), params.end() };
+}
+
+void SimpleDelayAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    currentSampleRate = sampleRate;
+    
+    // 1. Prepare Granular
+    granBuffer.setSize(getTotalNumOutputChannels(), (int)(sampleRate * 2.0));
+    granBuffer.clear();
+    granWritePos = 0;
+    for (auto& g : grains) g.active = false;
+
+    // 2. Prepare Delay
+    delayBuffer.setSize(getTotalNumOutputChannels(), (int)(sampleRate * 2.0));
+    delayBuffer.clear();
+    writePosition = 0;
+
+    // 3. Prepare Reverb
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = samplesPerBlock;
+    spec.numChannels = getTotalNumOutputChannels();
+    reverbModule.prepare(spec);
+}
+
+void SimpleDelayAudioProcessor::releaseResources() {}
+
+void SimpleDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear (i, 0, buffer.getNumSamples());
+
+    // ==========================================
+    // 1. GRANULAR PROCESSING
+    // ==========================================
+    float granSizeMs = apvts.getRawParameterValue("GRAN_SIZE")->load();
+    float granPitchSemi = apvts.getRawParameterValue("GRAN_PITCH")->load();
+    float granDensityHz = apvts.getRawParameterValue("GRAN_DENS")->load();
+    float granMix = apvts.getRawParameterValue("GRAN_MIX")->load();
+
+    int bufferLength = granBuffer.getNumSamples();
+
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        // A. Record clean input into circular buffer
+        for (int channel = 0; channel < totalNumInputChannels; ++channel) {
+            granBuffer.setSample(channel, granWritePos, buffer.getSample(channel, sample));
+        }
+
+        // B. Spawn new grains based on density
+        if (--samplesToNextGrain <= 0) {
+            samplesToNextGrain = (int)(currentSampleRate / granDensityHz);
+            
+            // Find an inactive grain to use
+            for (auto& g : grains) {
+                if (!g.active) {
+                    g.active = true;
+                    g.ageSamples = 0;
+                    g.lengthSamples = (int)(currentSampleRate * (granSizeMs / 1000.0f));
+                    // Convert semitones to playback speed multiplier
+                    g.speed = std::pow(2.0f, granPitchSemi / 12.0f); 
+                    
+                    // Start reading safely behind the write head so we don't click
+                    g.readPos = granWritePos - (g.lengthSamples * g.speed) - 100;
+                    while (g.readPos < 0) g.readPos += bufferLength;
+                    break;
+                }
+            }
+        }
+
+        // C. Process active grains
+        float wetL = 0.0f;
+        float wetR = 0.0f;
+
+        for (auto& g : grains) {
+            if (g.active) {
+                // Create a triangular window (envelope) so the grain fades in and out smoothly
+                float env = 1.0f - std::abs((g.ageSamples / (g.lengthSamples * 0.5f)) - 1.0f);
+
+                // Linear interpolation for smooth pitch shifting
+                int index1 = (int)g.readPos;
+                int index2 = (index1 + 1) % bufferLength;
+                float fraction = g.readPos - index1;
+
+                wetL += env * (granBuffer.getSample(0, index1) * (1.0f - fraction) + granBuffer.getSample(0, index2) * fraction);
+                if (totalNumInputChannels > 1) {
+                    wetR += env * (granBuffer.getSample(1, index1) * (1.0f - fraction) + granBuffer.getSample(1, index2) * fraction);
+                }
+
+                // Advance grain
+                g.ageSamples++;
+                g.readPos += g.speed;
+                if (g.readPos >= bufferLength) g.readPos -= bufferLength;
+                
+                // Kill grain if it has reached its length
+                if (g.ageSamples >= g.lengthSamples) g.active = false;
+            }
+        }
+
+        // Advance write pointer
+        granWritePos++;
+        if (granWritePos >= bufferLength) granWritePos = 0;
+
+        // D. Mix granular effect with dry signal
+        buffer.setSample(0, sample, (buffer.getSample(0, sample) * (1.0f - granMix)) + (wetL * granMix));
+        if (totalNumInputChannels > 1) {
+            buffer.setSample(1, sample, (buffer.getSample(1, sample) * (1.0f - granMix)) + (wetR * granMix));
+        }
+    }
+
+    // ==========================================
+    // 2. DELAY PROCESSING
+    // ==========================================
+    float delayTimeMs = apvts.getRawParameterValue("DELAY")->load();
+    float delayFeedback = apvts.getRawParameterValue("FEEDBACK")->load();
+    float delayMix = apvts.getRawParameterValue("MIX")->load();
+
+    int delaySamples = (int)(currentSampleRate * delayTimeMs / 1000.0);
+    int delayBufferLength = delayBuffer.getNumSamples();
+
+    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    {
+        auto* channelData = buffer.getWritePointer (channel);
+        auto* delayData = delayBuffer.getWritePointer (channel);
+        int tempWritePosition = writePosition;
+
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            int readPosition = tempWritePosition - delaySamples;
+            if (readPosition < 0) readPosition += delayBufferLength;
+
+            float delayedSample = delayData[readPosition];
+            float inputSample = channelData[sample];
+
+            delayData[tempWritePosition] = inputSample + (delayedSample * delayFeedback);
+            channelData[sample] = (inputSample * (1.0f - delayMix)) + (delayedSample * delayMix);
+
+            tempWritePosition++;
+            if (tempWritePosition >= delayBufferLength) tempWritePosition = 0;
+        }
+    }
+    writePosition += buffer.getNumSamples();
+    if (writePosition >= delayBuffer.getNumSamples()) writePosition -= delayBuffer.getNumSamples();
+
+    // ==========================================
+    // 3. REVERB PROCESSING 
+    // ==========================================
+    float revSize = apvts.getRawParameterValue("REV_SIZE")->load();
+    float revDamp = apvts.getRawParameterValue("REV_DAMP")->load();
+    float revMix  = apvts.getRawParameterValue("REV_MIX")->load();
+    float revEarly = apvts.getRawParameterValue("REV_EARLY")->load();
+    int revType   = apvts.getRawParameterValue("REV_TYPE")->load(); 
+
+    if (revType == 0) { 
+        reverbParams.roomSize = revSize * 0.5f; 
+        reverbParams.damping = revDamp;
+    } else if (revType == 1) { 
+        reverbParams.roomSize = revSize * 0.8f + 0.2f; 
+        reverbParams.damping = revDamp * 0.7f; 
+    } else { 
+        reverbParams.roomSize = revSize;
+        reverbParams.damping = revDamp * 0.9f; 
+    }
+
+    reverbParams.width = revEarly; 
+    reverbParams.wetLevel = revMix;
+    reverbParams.dryLevel = 1.0f - revMix;
+
+    reverbModule.setParameters(reverbParams);
+
+    juce::dsp::AudioBlock<float> block (buffer);
+    juce::dsp::ProcessContextReplacing<float> context (block);
+    reverbModule.process(context);
+}
+
+juce::AudioProcessorEditor* SimpleDelayAudioProcessor::createEditor() { return new SimpleDelayAudioProcessorEditor (*this); }
+bool SimpleDelayAudioProcessor::hasEditor() const { return true; }
+
+void SimpleDelayAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
+}
+
+void SimpleDelayAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState != nullptr)
+        if (xmlState->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new SimpleDelayAudioProcessor(); 
+}

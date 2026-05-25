@@ -1,0 +1,193 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+void ModernDial::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, 
+                                   float sliderPos, const float rotaryStartAngle, 
+                                   const float rotaryEndAngle, juce::Slider& slider)
+{
+    auto radius = (float) juce::jmin (width / 2, height / 2) - 8.0f;
+    auto centreX = (float) x + (float) width  * 0.5f;
+    auto centreY = (float) y + (float) height * 0.5f;
+    auto rx = centreX - radius;
+    auto ry = centreY - radius;
+    auto rw = radius * 2.0f;
+    auto angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+
+    juce::Path backgroundArc;
+    backgroundArc.addCentredArc (centreX, centreY, radius, radius, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
+    g.setColour (juce::Colour (0xff222222));
+    g.strokePath (backgroundArc, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    if (slider.isEnabled())
+    {
+        juce::Path valueArc;
+        valueArc.addCentredArc (centreX, centreY, radius, radius, 0.0f, rotaryStartAngle, angle, true);
+        g.setColour (juce::Colour (0xff00e6cc)); 
+        g.strokePath (valueArc, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    juce::ColourGradient gradient (juce::Colour (0xff444444), centreX, centreY - radius, 
+                                   juce::Colour (0xff111111), centreX, centreY + radius, false);
+    g.setGradientFill (gradient);
+    g.fillEllipse (rx + 4.0f, ry + 4.0f, rw - 8.0f, rw - 8.0f);
+
+    juce::Path pointer;
+    pointer.addRoundedRectangle (-1.5f, -radius + 8.0f, 3.0f, radius * 0.5f, 1.5f);
+    pointer.applyTransform (juce::AffineTransform::rotation (angle).translated (centreX, centreY));
+    g.setColour (juce::Colour (0xffffffff));
+    g.fillPath (pointer);
+}
+
+SimpleDelayAudioProcessorEditor::SimpleDelayAudioProcessorEditor (SimpleDelayAudioProcessor& p)
+    : AudioProcessorEditor (&p), audioProcessor (p)
+{
+    setLookAndFeel (&customStyle);
+
+    auto setupLabel = [this](juce::Label& label, juce::Component& slider, const juce::String& text) {
+        label.setText(text, juce::dontSendNotification);
+        label.setJustificationType(juce::Justification::centred);
+        label.setColour(juce::Label::textColourId, juce::Colour(0xffaaaaaa));
+        label.attachToComponent(&slider, false);
+        addAndMakeVisible(label);
+    };
+
+    // ================= GRANULAR UI =================
+    granSizeSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    granSizeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(granSizeSlider);
+    granSizeAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "GRAN_SIZE", granSizeSlider);
+    setupLabel(granSizeLabel, granSizeSlider, "Grain Size");
+
+    granPitchSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    granPitchSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(granPitchSlider);
+    granPitchAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "GRAN_PITCH", granPitchSlider);
+    setupLabel(granPitchLabel, granPitchSlider, "Pitch");
+
+    granDensSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    granDensSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(granDensSlider);
+    granDensAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "GRAN_DENS", granDensSlider);
+    setupLabel(granDensLabel, granDensSlider, "Density");
+
+    granMixSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    granMixSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(granMixSlider);
+    granMixAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "GRAN_MIX", granMixSlider);
+    setupLabel(granMixLabel, granMixSlider, "Gran Mix");
+
+    // ================= DELAY UI =================
+    delaySlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    delaySlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(delaySlider);
+    delayAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "DELAY", delaySlider);
+    setupLabel(delayLabel, delaySlider, "Delay Time");
+
+    feedbackSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    feedbackSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(feedbackSlider);
+    feedbackAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "FEEDBACK", feedbackSlider);
+    setupLabel(feedbackLabel, feedbackSlider, "Feedback");
+
+    mixSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    mixSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(mixSlider);
+    mixAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "MIX", mixSlider);
+    setupLabel(mixLabel, mixSlider, "Delay Mix");
+
+    // ================= REVERB UI =================
+    revSizeSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    revSizeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(revSizeSlider);
+    revSizeAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "REV_SIZE", revSizeSlider);
+    setupLabel(revSizeLabel, revSizeSlider, "Size");
+
+    revDampSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    revDampSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(revDampSlider);
+    revDampAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "REV_DAMP", revDampSlider);
+    setupLabel(revDampLabel, revDampSlider, "Damping");
+    
+    revEarlySlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    revEarlySlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(revEarlySlider);
+    revEarlyAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "REV_EARLY", revEarlySlider);
+    setupLabel(revEarlyLabel, revEarlySlider, "Early Ref");
+
+    revMixSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    revMixSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    addAndMakeVisible(revMixSlider);
+    revMixAttachment = std::make_unique<SliderAttachment>(audioProcessor.apvts, "REV_MIX", revMixSlider);
+    setupLabel(revMixLabel, revMixSlider, "Rev Mix");
+
+    revTypeBox.addItemList({"Room", "Hall", "Plate"}, 1);
+    addAndMakeVisible(revTypeBox);
+    revTypeAttachment = std::make_unique<ComboAttachment>(audioProcessor.apvts, "REV_TYPE", revTypeBox);
+    setupLabel(revTypeLabel, revTypeBox, "Type");
+
+    // Increased window height to fit 3 rows
+    setSize (650, 700);
+}
+
+SimpleDelayAudioProcessorEditor::~SimpleDelayAudioProcessorEditor()
+{
+    setLookAndFeel (nullptr);
+}
+
+void SimpleDelayAudioProcessorEditor::paint (juce::Graphics& g)
+{
+    juce::ColourGradient bgGradient (juce::Colour(0xff1e1e24), 0, 0, 
+                                     juce::Colour(0xff0a0a0c), 0, (float)getHeight(), false);
+    g.setGradientFill(bgGradient);
+    g.fillAll();
+    
+    g.setColour (juce::Colour(0xff2a2a30));
+    int rowHeight = getHeight() / 3;
+    
+    // Draw 3 panels
+    g.fillRoundedRectangle(10, 10, getWidth() - 20, rowHeight - 20, 8.0f);
+    g.fillRoundedRectangle(10, rowHeight + 10, getWidth() - 20, rowHeight - 20, 8.0f);
+    g.fillRoundedRectangle(10, (rowHeight * 2) + 10, getWidth() - 20, rowHeight - 20, 8.0f);
+
+    g.setColour (juce::Colour(0xffffffff));
+    g.setFont (juce::Font(20.0f, juce::Font::bold));
+    g.drawText ("GRANULAR", 20, 20, 200, 30, juce::Justification::left);
+    g.drawText ("DELAY", 20, rowHeight + 20, 200, 30, juce::Justification::left);
+    g.drawText ("REVERB", 20, (rowHeight * 2) + 20, 200, 30, juce::Justification::left);
+}
+
+void SimpleDelayAudioProcessorEditor::resized()
+{
+    auto bounds = getLocalBounds();
+    int rowHeight = getHeight() / 3;
+    
+    auto granArea = bounds.removeFromTop(rowHeight).reduced(30);
+    granArea.removeFromTop(30); 
+    
+    auto delayArea = bounds.removeFromTop(rowHeight).reduced(30);
+    delayArea.removeFromTop(30); 
+    
+    auto reverbArea = bounds.reduced(30);
+    reverbArea.removeFromTop(30); 
+
+    // Layout Granular Knobs
+    int granWidth = granArea.getWidth() / 4;
+    granSizeSlider.setBounds(granArea.removeFromLeft(granWidth).reduced(10));
+    granPitchSlider.setBounds(granArea.removeFromLeft(granWidth).reduced(10));
+    granDensSlider.setBounds(granArea.removeFromLeft(granWidth).reduced(10));
+    granMixSlider.setBounds(granArea.removeFromLeft(granWidth).reduced(10));
+
+    // Layout Delay Knobs 
+    int delayWidth = delayArea.getWidth() / 3;
+    delaySlider.setBounds(delayArea.removeFromLeft(delayWidth).reduced(10));
+    feedbackSlider.setBounds(delayArea.removeFromLeft(delayWidth).reduced(10));
+    mixSlider.setBounds(delayArea.removeFromLeft(delayWidth).reduced(10));
+
+    // Layout Reverb Knobs
+    int revWidth = reverbArea.getWidth() / 5;
+    revTypeBox.setBounds(reverbArea.removeFromLeft(revWidth).withSizeKeepingCentre(revWidth - 20, 30));
+    revSizeSlider.setBounds(reverbArea.removeFromLeft(revWidth).reduced(10));
+    revDampSlider.setBounds(reverbArea.removeFromLeft(revWidth).reduced(10));
+    revEarlySlider.setBounds(reverbArea.removeFromLeft(revWidth).reduced(10));
+    revMixSlider.setBounds(reverbArea.removeFromLeft(revWidth).reduced(10));
+}
