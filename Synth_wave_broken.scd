@@ -214,10 +214,10 @@ s.waitForBoot({
     ~vstCtrl = VSTPluginController(~vstSynth);
 
     // 1. Force a quick scan of the VST3 folder to catch any newly compiled plugins
-    VSTPlugin.search(s, "C:/Program Files/Common Files/VST3", action: {
+    VSTPlugin.search(s, "C:/Users/Saeed13709/OneDrive/Desktop/TheLadybugs_CMLS2026-main", action: {
 
         // 2. Open the specific plugin
-        ~vstCtrl.open("C:/Program Files/Common Files/VST3/The_lady_bugs.vst3", editor: true, action: { |plugin|
+        ~vstCtrl.open(""C:/Users/Saeed13709/OneDrive/Desktop/TheLadybugs_CMLS2026-main/The_lady_bugs.vst3"", editor: true, action: { |plugin|
             if(plugin.notNil) {
                 "Juce interface loaded!".postln;
 
