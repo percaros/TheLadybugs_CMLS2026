@@ -209,6 +209,7 @@ TheLadybugs_CMLS2026/
 ├── Synth_wave_broken.scd        # SuperCollider wavetable synthesizer
 ├── interfaccia_osc_grain.json   # Open Stage Control session
 ├── Giovanni.exe                 # Compiled JUCE MIDI Router
+├── The_lady_bugs.vst3            # Compiled JUCE VST3 Plugin
 ├── @echo off.bat                # Windows auto-launch script
 └── README.md
 ```
